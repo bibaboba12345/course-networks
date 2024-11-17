@@ -173,10 +173,9 @@ class MyTCPProtocol(UDPBasedProtocol):
         self.need_closure = 0
         return len(data)
         
-        
-    def recv(self, n: int):
-        if hasattr(self, "th"):
-            self.th.join()
+    def reciever(self, answer):
+        # if hasattr(self, "th"):
+        #     self.th.join()
         header = make_pack(self.sure_recvfrom(0))
         while(header.ack_tp != 3):
             header = make_pack(self.sure_recvfrom(0))
@@ -208,7 +207,15 @@ class MyTCPProtocol(UDPBasedProtocol):
         answ = bytearray(0)
         for i in range(cnt_packs):
             answ.extend(packs[i])
-        return answ
+        answer.append(answ)
+
+    def recv(self, n: int):
+        answ = []
+        self.th2 = Thread(target=self.reciever, args = (answ, ))
+        self.th2.run()
+        self.th2.join()
+        # self.reciever(answ)
+        return answ[0]
     
     def close(self):
         super().close()
