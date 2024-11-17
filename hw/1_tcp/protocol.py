@@ -22,8 +22,7 @@ class UDPBasedProtocol:
             ports_data[local_addr].clear()
         else:
             ports_data[local_addr] = []
-        self.rcv_read_counter = len(ports_data[local_addr])
-        self.wrt_read_counter = len(ports_data[local_addr])
+        self.counters = [0,0]
         self.local_addr = local_addr
         self.remote_addr = remote_addr
         self.udp_socket.bind(local_addr)
@@ -48,35 +47,21 @@ class UDPBasedProtocol:
         self.packs_sent += 1
         return self.udp_socket.sendto(data, self.remote_addr)
 
-    def recvfrom(self, from_rcv: bool):
-        if(from_rcv):
-            if(self.rcv_read_counter == len(ports_data[self.local_addr])):
+    def recvfrom(self, ind: int):
+            if(self.counters[ind] == len(ports_data[self.local_addr])):
                 self.attempt_prolong()
-            if(self.rcv_read_counter == len(ports_data[self.local_addr])):
+            if(self.counters[ind] == len(ports_data[self.local_addr])):
                 return bytes(0)
-            self.rcv_read_counter += 1
-            return ports_data[self.local_addr][self.rcv_read_counter - 1]
-        else:
-            if(self.wrt_read_counter == len(ports_data[self.local_addr])):
-                self.attempt_prolong()
-            if(self.wrt_read_counter == len(ports_data[self.local_addr])):
-                return bytes(0)
-            self.wrt_read_counter += 1
-            return ports_data[self.local_addr][self.wrt_read_counter - 1]
+            self.counters[ind] += 1
+            return ports_data[self.local_addr][self.counters[ind] - 1]
 
 
-    def sure_recvfrom(self, from_rcv: bool):
-        if(from_rcv):
-            while(self.rcv_read_counter == len(ports_data[self.local_addr])):
+    def sure_recvfrom(self, ind: int):
+        if(self.counters[ind] == len(ports_data[self.local_addr])):
                 self.sure_prolong()
-            self.rcv_read_counter += 1
-            return ports_data[self.local_addr][self.rcv_read_counter - 1]
-        else:
-            while(self.wrt_read_counter == len(ports_data[self.local_addr])):
-                self.sure_prolong()
-            self.wrt_read_counter += 1
-            return ports_data[self.local_addr][self.wrt_read_counter - 1]
-
+        self.counters[ind] += 1
+        return ports_data[self.local_addr][self.counters[ind] - 1]
+    
     def close(self):
         print("closed thread, packs sent: ", self.packs_sent)
         watching[self.local_addr] -= 1
@@ -132,7 +117,7 @@ class MyTCPProtocol(UDPBasedProtocol):
         super().__init__(*args, **kwargs)
         q = queue.Queue()
 
-    def sender(self, data: bytes):
+    def sender(self, data: bytes, ind: int):
         sess = randint(0, 255)
         data = bytearray(data)
         packets = []
@@ -155,10 +140,10 @@ class MyTCPProtocol(UDPBasedProtocol):
         counter = 0
         while(True):
             counter += 1
-            c = make_pack(self.recvfrom(False))
+            c = make_pack(self.recvfrom(ind))
             while(c.sess != -1 and c.sess != sess):
                 if(c.sess != sess or c.ack_tp != 1):
-                    c = make_pack(self.recvfrom(False))
+                    c = make_pack(self.recvfrom(ind))
                     continue
             if(c.sess != sess or c.ack_tp != 1):
                 #sleep(0.001)
@@ -172,17 +157,18 @@ class MyTCPProtocol(UDPBasedProtocol):
             for i in range(len(packets)):
                 if not ack[i]:
                     self.sendto(packets[i].bytes())
-            msg = make_pack(self.recvfrom(False))
+            msg = make_pack(self.recvfrom(ind))
             while(msg.ack_tp == 2 and msg.sess == sess):
                 if(not ack[msg.nmb]):
                     ack[msg.nmb] = True
                     cnt_acks += 1
-                msg = make_pack(self.recvfrom(False))
+                msg = make_pack(self.recvfrom(ind))
             #sleep(0.001)
 
     def send(self, data: bytes):
         watching[self.local_addr] += 1
-        self.th = Thread(target=self.sender, args = (data, ))
+        self.counters.append(len(ports_data[self.local_addr]))
+        self.th = Thread(target=self.sender, args = (data, len(self.counters) - 1))
         self.th.start() 
         self.need_closure = 0
         return len(data)
@@ -191,9 +177,9 @@ class MyTCPProtocol(UDPBasedProtocol):
     def recv(self, n: int):
         if hasattr(self, "th"):
             self.th.join()
-        header = make_pack(self.sure_recvfrom(True))
+        header = make_pack(self.sure_recvfrom(0))
         while(header.ack_tp != 3):
-            header = make_pack(self.sure_recvfrom(True))
+            header = make_pack(self.sure_recvfrom(0))
         sess = header.sess
         header_ack = pack(header.nmb, 1, sess, bytes(0))
         self.sendto(header_ack.bytes())
@@ -209,7 +195,7 @@ class MyTCPProtocol(UDPBasedProtocol):
         acks = [False for i in range(cnt_packs)]
         cnt_acks = 0
         while(cnt_acks != cnt_packs):
-            r_bytes = make_pack(self.recvfrom(True))
+            r_bytes = make_pack(self.recvfrom(0))
             while(r_bytes.ack_tp == 0 and r_bytes.sess == sess):
                 packs[r_bytes.nmb] = r_bytes.data
                 if not acks[r_bytes.nmb]:
@@ -217,7 +203,7 @@ class MyTCPProtocol(UDPBasedProtocol):
                     acks[r_bytes.nmb] = True
                 ack = pack(r_bytes.nmb, 2, sess, bytes(0))
                 self.sendto(ack.bytes())
-                r_bytes = make_pack(self.recvfrom(True))
+                r_bytes = make_pack(self.recvfrom(0))
 
         answ = bytearray(0)
         for i in range(cnt_packs):

@@ -24,17 +24,15 @@ print(a_addr, '\n', b_addr)
 
 with closing(MyTCPProtocol(local_addr=a_addr, remote_addr=b_addr)) as a, \
          closing(MyTCPProtocol(local_addr=b_addr, remote_addr=a_addr)) as b:
-    msg = os.urandom(10)
+    msg = bytes("LOL message", "utf-8")
     print("msg = ", msg)
     print('Hopping in')
-    a.send(msg)
-    print('Sent!')
-    recieved = b.recv(len(msg))
-    print('Recieved!')
-    print(recieved)
-    b.send(recieved)
-    print('Sent back!')
-    recieved = a.recv(len(recieved))
-    print('Recieved back!')
-    print(recieved)
+    for i in range(10):
+        a.send(msg)
+    print('Sent 10 times!')
+    for i in range(10):
+        recieved = b.recv(len(msg))
+        print('Recieved ', i,  'th time')
+        print(recieved.decode("utf-8"))
+
 
