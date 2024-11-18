@@ -1,4 +1,4 @@
-from protocol import MyTCPProtocol
+from protocol import MyTCPProtocol, pack, make_pack
 from servers import EchoClient, EchoServer, ParallelClientServer
 
 import os
@@ -22,17 +22,23 @@ b_addr = ('127.0.0.1', generate_port())
 
 print(a_addr, '\n', b_addr)
 
-with closing(MyTCPProtocol(local_addr=a_addr, remote_addr=b_addr)) as a, \
-         closing(MyTCPProtocol(local_addr=b_addr, remote_addr=a_addr)) as b:
-    msg = bytes("LOL message", "utf-8")
-    print("msg = ", msg)
-    print('Hopping in')
-    for i in range(10):
-        a.send(msg)
-    print('Sent 10 times!')
-    for i in range(10):
-        recieved = b.recv(len(msg))
-        print('Recieved ', i,  'th time')
-        print(recieved.decode("utf-8"))
+pck = pack(1, 1, 12121, bytes(0))
+
+pck = make_pack(pck.bytes())
+
+print(str(pck))
+
+# with closing(MyTCPProtocol(local_addr=a_addr, remote_addr=b_addr)) as a, \
+#          closing(MyTCPProtocol(local_addr=b_addr, remote_addr=a_addr)) as b:
+#     msg = bytes("LOL message", "utf-8")
+#     print("msg = ", msg)
+#     print('Hopping in')
+#     for i in range(10):
+#         a.send(msg)
+#     print('Sent 10 times!')
+#     for i in range(10):
+#         recieved = b.recv(len(msg))
+#         print('Recieved ', i,  'th time')
+#         print(recieved.decode("utf-8"))
 
 

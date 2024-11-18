@@ -3,10 +3,12 @@ import select
 from time import sleep
 from random import randint
 from threading import Thread
+import threading
 import queue
 
 DATABLOCK_SIZE = 60000
 MAX_PWR = 200
+MAX_SESS = pow(256,8)
 
 ports_data = {}
 watching = {}
@@ -80,7 +82,7 @@ class pack:
         self.nmb = 0
         self.data = []
         self.ack_tp = 0
-        self.sess = randint(255)
+        self.sess = randint(0, MAX_SESS - 1)
 
     def __init__(self, nmb: int, ack_tp: int, sess: int, data: bytes):
         self.nmb = nmb
@@ -91,13 +93,16 @@ class pack:
 
     def bytes(self):
         assert(self.nmb // 256 <= 255)
-        res = bytearray(4 + len(self.data))
+        res = bytearray(11 + len(self.data))
         res[0] = self.nmb % 256
         res[1] = self.nmb // 256
         res[2] = self.ack_tp
-        res[3] = self.sess
+        n = self.sess
+        for i in range(3, 3 + 8):
+            res[i] = n % 256
+            n //= 256
         for i in range(len(self.data)):
-            res[i + 4] = self.data[i]
+            res[i + 11] = self.data[i]
         return res
     
     def __str__(self):
@@ -105,20 +110,29 @@ class pack:
         return ans
 
 def make_pack(a : bytes):
-    if(len(a) <= 3):
+    if(len(a) <= 10):
         return pack(-1, -1, -1, bytes(0))
-    return pack(a[0] + a[1] * 256, a[2], a[3],  a[4:])
+    
+    sess = 0
+    for i in range(10, 2, -1):
+        sess *= 256
+        sess += a[i]
+
+    return pack(a[0] + a[1] * 256, a[2], sess,  a[11:])
 
 
 
 class MyTCPProtocol(UDPBasedProtocol):
-    q = queue.Queue()
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        q = queue.Queue()
+        self.threads_count = 0
+        self.th = None
 
-    def sender(self, data: bytes, ind: int):
-        sess = randint(0, 255)
+    def sender(self, data: bytes, ind: int, last_sender):
+        if last_sender != None:
+            last_sender.join()
+        sess = randint(0, MAX_SESS - 1)
+        #print('entered sender ', sess, 'with ind ', ind)
         data = bytearray(data)
         packets = []
         num_packs = 0
@@ -136,6 +150,7 @@ class MyTCPProtocol(UDPBasedProtocol):
             head_packet.data[i] = n % 256
             n //= 256
 
+        #print('sender ', sess, ' sent header')
         self.sendto(head_packet.bytes())
         counter = 0
         while(True):
@@ -150,38 +165,50 @@ class MyTCPProtocol(UDPBasedProtocol):
                 self.sendto(head_packet.bytes())
                 continue
             break
+        #print('sender ', sess, 'got ACK on header')
         cnt_acks = 0
         ack = [False for i in range(len(packets))]
 
         while(cnt_acks != len(packets)):
+            #print('sender ', sess, ' iteration')
             for i in range(len(packets)):
                 if not ack[i]:
                     self.sendto(packets[i].bytes())
             msg = make_pack(self.recvfrom(ind))
-            while(msg.ack_tp == 2 and msg.sess == sess):
-                if(not ack[msg.nmb]):
-                    ack[msg.nmb] = True
-                    cnt_acks += 1
+            while(msg.sess != -1):
+                while(msg.ack_tp == 2 and msg.sess == sess):
+                    #print('sender ', sess, 'got ACK on ', msg.nmb)
+                    if(not ack[msg.nmb]):
+                        ack[msg.nmb] = True
+                        cnt_acks += 1
+                        #print('sender ', sess, 'needs ', len(packets), 'ACKs, has ', cnt_acks)
+                    msg = make_pack(self.recvfrom(ind))
                 msg = make_pack(self.recvfrom(ind))
             #sleep(0.001)
+        #print('sender ', sess, ' finished sending')
+        self.threads_count -= 1
 
     def send(self, data: bytes):
         watching[self.local_addr] += 1
         self.counters.append(len(ports_data[self.local_addr]))
-        self.th = Thread(target=self.sender, args = (data, len(self.counters) - 1))
+        self.th = Thread(target=self.sender, args = (data, len(self.counters) - 1, self.th, ))
+        self.th.daemon = True
+        self.threads_count += 1
         self.th.start() 
         self.need_closure = 0
         return len(data)
         
     def reciever(self, answer):
-        # if hasattr(self, "th"):
-        #     self.th.join()
-        header = make_pack(self.sure_recvfrom(0))
+        if hasattr(self, "th") and self.threads_count == 1:
+            self.th.join()
+        #print('entered reciever')
+        header = make_pack(self.recvfrom(0))
         while(header.ack_tp != 3):
-            header = make_pack(self.sure_recvfrom(0))
+            header = make_pack(self.recvfrom(0))
+        #print('starting recieve session ', header.sess)
         sess = header.sess
         header_ack = pack(header.nmb, 1, sess, bytes(0))
-        self.sendto(header_ack.bytes())
+
         cnt_packs = header.nmb
 
         total_len = 0
@@ -193,28 +220,40 @@ class MyTCPProtocol(UDPBasedProtocol):
         packs = [bytearray(0) for i in range(cnt_packs)]
         acks = [False for i in range(cnt_packs)]
         cnt_acks = 0
+        #print('reciever ', sess, 'in packet-search mode, active threads =', threading.active_count())
+
+        started_exchange = False
         while(cnt_acks != cnt_packs):
             r_bytes = make_pack(self.recvfrom(0))
+            if (not started_exchange):
+                #print('reciever ', sess, ' sends ack on header again')
+                self.sendto(header_ack.bytes())
             while(r_bytes.ack_tp == 0 and r_bytes.sess == sess):
+                started_exchange = True
                 packs[r_bytes.nmb] = r_bytes.data
                 if not acks[r_bytes.nmb]:
                     cnt_acks += 1
                     acks[r_bytes.nmb] = True
                 ack = pack(r_bytes.nmb, 2, sess, bytes(0))
+                #print('reciever ', sess, ' ACK ', r_bytes.nmb)
                 self.sendto(ack.bytes())
                 r_bytes = make_pack(self.recvfrom(0))
-
+        #print('recieve operation ', sess, ' finished')
         answ = bytearray(0)
         for i in range(cnt_packs):
             answ.extend(packs[i])
         answer.append(answ)
+        answer.append(sess)
+        #print('recieve operation ', sess, ' built answer and is returning')
 
     def recv(self, n: int):
         answ = []
-        self.th2 = Thread(target=self.reciever, args = (answ, ))
-        self.th2.run()
-        self.th2.join()
-        # self.reciever(answ)
+        # self.th2 = Thread(target=self.reciever, args = (answ, ))
+        # self.th2.daemon = True
+        # self.th2.start()
+        # self.th2.join()
+        self.reciever(answ)
+        #print('reciever session ', answ[1], ' thread terminated')
         return answ[0]
     
     def close(self):
