@@ -57,7 +57,7 @@ def setup_netem(packet_loss, duplicate, reorder):
     os.system(netem_cmd)
 
 
-@pytest.mark.parametrize("iterations", [50, 100])
+@pytest.mark.parametrize("iterations", [10, 50, 100, 500])
 @pytest.mark.timeout(30)
 def test_basic(iterations):
     setup_netem(packet_loss=0.0, duplicate=0.0, reorder=0.0)

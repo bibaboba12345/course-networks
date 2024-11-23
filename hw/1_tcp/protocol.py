@@ -127,6 +127,7 @@ class MyTCPProtocol(UDPBasedProtocol):
         super().__init__(*args, **kwargs)
         self.threads_count = 0
         self.th = None
+        self.used_sessions = set()
 
     def sender(self, data: bytes, ind: int, last_sender):
         if last_sender != None:
@@ -144,11 +145,7 @@ class MyTCPProtocol(UDPBasedProtocol):
                 l = i + 1
                 packets.append(packet)
         
-        head_packet = pack(num_packs, 3, sess, bytes(MAX_PWR))
-        n = len(data)
-        for i in range(MAX_PWR):
-            head_packet.data[i] = n % 256
-            n //= 256
+        head_packet = pack(num_packs, 3, sess, bytes(0))
 
         #print('sender ', sess, ' sent header')
         self.sendto(head_packet.bytes())
@@ -161,7 +158,7 @@ class MyTCPProtocol(UDPBasedProtocol):
                     c = make_pack(self.recvfrom(ind))
                     continue
             if(c.sess != sess or c.ack_tp != 1):
-                #sleep(0.001)
+                sleep(0.000001)
                 self.sendto(head_packet.bytes())
                 continue
             break
@@ -184,7 +181,7 @@ class MyTCPProtocol(UDPBasedProtocol):
                         #print('sender ', sess, 'needs ', len(packets), 'ACKs, has ', cnt_acks)
                     msg = make_pack(self.recvfrom(ind))
                 msg = make_pack(self.recvfrom(ind))
-            #sleep(0.001)
+            sleep(0.0000005)
         #print('sender ', sess, ' finished sending')
         self.threads_count -= 1
 
@@ -203,19 +200,14 @@ class MyTCPProtocol(UDPBasedProtocol):
             self.th.join()
         #print('entered reciever')
         header = make_pack(self.recvfrom(0))
-        while(header.ack_tp != 3):
+        while(header.ack_tp != 3 or header.sess in self.used_sessions):
             header = make_pack(self.recvfrom(0))
         #print('starting recieve session ', header.sess)
         sess = header.sess
+        self.used_sessions.add(sess)
         header_ack = pack(header.nmb, 1, sess, bytes(0))
 
         cnt_packs = header.nmb
-
-        total_len = 0
-        for i in range(MAX_PWR - 1, -1, -1):
-            total_len *= 256
-            total_len += header.data[i]
-
 
         packs = [bytearray(0) for i in range(cnt_packs)]
         acks = [False for i in range(cnt_packs)]

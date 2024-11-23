@@ -36,6 +36,10 @@ class ParallelClientServer(Base):
         for i in range(self.iterations):
             msg = self.socket.recv(8)
             i_recv = struct.unpack('!Q', msg)[0]
+            if i != i_recv:
+                print(i, " ", i_recv, "!!!")
+            else:
+                print(i, " ", i_recv)
             assert i_recv == i
         
         
