@@ -24,6 +24,8 @@ class EchoClient(Base):
             n = self.socket.send(msg)
             assert n == self.msg_size
             assert msg == self.socket.recv(n)
+            if self.msg_size == 10 and _ % 100 == 0:
+                print(_)
 
 
 class ParallelClientServer(Base):
